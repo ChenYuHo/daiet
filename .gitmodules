@@ -1,0 +1,6 @@
+[submodule "lib/dpdk"]
+	path = lib/dpdk
+	url = https://github.com/sands-lab/dpdk.git
+[submodule "lib/vcl"]
+	path = lib/vcl
+	url = https://github.com/vcoda/vectorclass.git
