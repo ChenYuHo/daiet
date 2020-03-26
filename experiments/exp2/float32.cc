@@ -9,6 +9,7 @@
 #include "gloo/rendezvous/prefix_store.h"
 #include "gloo/transport/tcp/device.h"
 #include "gloo/barrier_all_to_one.h"
+#include "gloo/allreduce.h"
 
 #include <signal.h>
 
@@ -89,8 +90,14 @@ int main(int argc, char* argv[]) {
 
     //Warm up rounds
     for (int i = 0; i < 10; i++) {
-        auto allreduce = make_shared<gloo::AllreduceHalvingDoubling<float>>(context, ptrs, count);
-        allreduce->run();
+        gloo::AllreduceOptions opts(context);
+        opts.setOutputs(ptrs, count);
+        opts.setReduceFunction(
+            static_cast<void(*)(void*, const void*, const void*, size_t)>(
+                &gloo::sum<float>));
+        gloo::allreduce(opts);
+        //auto allreduce = make_shared<gloo::AllreduceHalvingDoubling<float>>(context, ptrs, count);
+        //allreduce->run();
     }
     copy(base_data.begin(), base_data.end(), data.begin());
 
@@ -103,14 +110,20 @@ int main(int argc, char* argv[]) {
         }
 
         // Instantiate the collective algorithm
-        auto allreduce = make_shared<gloo::AllreduceHalvingDoubling<float>>(context, ptrs, count);
+        //auto allreduce = make_shared<gloo::AllreduceHalvingDoubling<float>>(context, ptrs, count);
 
         cout << "-- Allreduce Round " << roundnum << endl;
 
         auto begin = chrono::high_resolution_clock::now();
         // Run the algorithm
-        allreduce->run();
+        //allreduce->run();
 
+        gloo::AllreduceOptions opts(context);
+        opts.setOutputs(ptrs, count);
+        opts.setReduceFunction(
+            static_cast<void(*)(void*, const void*, const void*, size_t)>(
+                &gloo::sum<float>));
+        gloo::allreduce(opts);
         auto end = chrono::high_resolution_clock::now();
 
         cout << "---- Ended" << endl << "#ms " << chrono::duration_cast<chrono::milliseconds>(end - begin).count() << endl;

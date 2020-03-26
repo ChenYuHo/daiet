@@ -1,4 +1,4 @@
-
+#include "malloc.h"
 // Align buffers to 32 bytes to support vectorized code
 const size_t kBufferAlignment = 32;
 

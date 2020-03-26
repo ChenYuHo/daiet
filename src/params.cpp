@@ -46,6 +46,7 @@ namespace daiet {
                 ("daiet.max_num_pending_messages", po::value<uint32_t>(&(daiet_par.getMaxNumPendingMessages()))->default_value(256), "Max number of pending, unaggregated messages")
                 ("daiet.num_updates", po::value<uint32_t>(&num_updates)->default_value(32), "Number of updates per packet")
                 ("daiet.num_workers", po::value<uint16_t>(&(daiet_par.getNumWorkers()))->default_value(0), "Number of workers")
+                ("daiet.sync_blocks", po::value<uint32_t>(&(daiet_par.getSyncBlocks()))->default_value(10), "Synchronization Blocks ")
 #ifdef TIMERS
                 ("daiet.timeout", po::value<double>(&(daiet_par.getTimeout()))->default_value(1), "Timeout in millisecond")
 #endif
@@ -162,6 +163,10 @@ namespace daiet {
 
     uint16_t& daiet_params::getNumWorkers() {
         return num_workers;
+    }
+
+    uint32_t& daiet_params::getSyncBlocks() {
+        return sync_blocks;
     }
 
     void daiet_params::setNumUpdates(uint32_t numUpdates) {

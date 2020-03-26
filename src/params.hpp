@@ -103,6 +103,8 @@ namespace daiet {
 
             uint16_t num_workers;
 
+            uint32_t sync_blocks;
+
         public:
             daiet_params();
             ~daiet_params();
@@ -110,6 +112,8 @@ namespace daiet {
             void print_params();
 
             uint16_t& getNumWorkers();
+
+            uint32_t& getSyncBlocks();
 
             __rte_always_inline uint32_t getNumUpdates() const {
                 return num_updates;

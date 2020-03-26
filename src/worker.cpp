@@ -53,7 +53,7 @@ namespace daiet {
     thread_local static Vec32c vec_c;
     thread_local static Vec8i mask_i(0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff, 0x7fffffff);
 
-    thread_local static void (*fill_fn)(entry_hdr*, uint32_t, uint32_t);
+    thread_local static void (*fill_fn)(entry_hdr*, uint32_t, uint32_t, uint32_t);
     thread_local static void (*store_fn)(daiet_hdr*, uint32_t);
 
 #ifdef TIMERS
@@ -67,7 +67,7 @@ namespace daiet {
 #endif
 #endif
 
-    thread_local uint64_t w_unsent = 0;
+	thread_local uint64_t w_unsent = 0;
 
 #ifdef LATENCIES
 
@@ -204,7 +204,12 @@ namespace daiet {
         struct entry_hdr * entry = (struct entry_hdr *) (daiet + 1);
 
         if (likely(tsi + num_updates <= tensor_size)) {
-
+#ifdef NOSCALING
+            for (final_tsi = tsi + num_updates; tsi < final_tsi; tsi++, entry++) {
+                uint32_t tmp = (rte_be_to_cpu_32(entry->upd));
+                static_cast<float*>(tu.ptr)[tsi] = ((float*)&tmp)[0];
+            }
+#else
             num_spare_elements = num_updates % 8;
 
 #if MAX_VECTOR_SIZE >= 512
@@ -221,12 +226,16 @@ namespace daiet {
             for (final_tsi = tsi + num_spare_elements; tsi < final_tsi; tsi++, entry++) {
                 static_cast<float*>(tu.ptr)[tsi] = (float((int32_t)rte_be_to_cpu_32(entry->upd))) / scalingfactor;
             }
-
+#endif
         } else {
 
             for (final_tsi = tsi + tensor_size - tsi; tsi < final_tsi; tsi++, entry++) {
-
+#ifdef NOSCALING
+                uint32_t tmp = (rte_be_to_cpu_32(entry->upd));
+                static_cast<float*>(tu.ptr)[tsi] = ((float*)&tmp)[0];
+#else
                 static_cast<float*>(tu.ptr)[tsi] = (float((int32_t)rte_be_to_cpu_32(entry->upd))) / scalingfactor;
+#endif
             }
         }
 
@@ -258,18 +267,29 @@ namespace daiet {
              vec_f.store(&(static_cast<float*>(tu.ptr)[tsi]));
              }
              */
-
+#ifdef NOSCALING
+            for (final_tsi = tsi + num_updates; tsi < final_tsi; tsi++, entry++) {
+                uint32_t tmp = (rte_be_to_cpu_32(entry->upd));
+                static_cast<gloo::float16*>(tu.ptr)[tsi] = gloo::cpu_float2half_rn(((float*)&tmp)[0]);
+            }
+#else
             for (final_tsi = tsi + num_updates; tsi < final_tsi; tsi++, entry++) {
 
                 static_cast<gloo::float16*>(tu.ptr)[tsi] = gloo::cpu_float2half_rn((float((int32_t)rte_be_to_cpu_32(entry->upd))) / scalingfactor);
             }
-
+#endif
         } else {
-
+#ifdef NOSCALING
+            for (final_tsi = tsi + tensor_size - tsi; tsi < final_tsi; tsi++, entry++) {
+                uint32_t tmp = (rte_be_to_cpu_32(entry->upd));
+                static_cast<gloo::float16*>(tu.ptr)[tsi] = gloo::cpu_float2half_rn(((float*)&tmp)[0]);
+            }
+#else
             for (final_tsi = tsi + tensor_size - tsi; tsi < final_tsi; tsi++, entry++) {
 
                 static_cast<gloo::float16*>(tu.ptr)[tsi] = gloo::cpu_float2half_rn((float((int32_t)rte_be_to_cpu_32(entry->upd))) / scalingfactor);
             }
+#endif
         }
 
     }
@@ -281,7 +301,7 @@ namespace daiet {
         } x = {0xff800000}; // FLOAT32_MIN
         return x.f;
     }
-
+#ifndef NOSCALING
     __rte_always_inline void fill_exponent(struct exp_hdr *exp, float* cur_float_ptr, uint32_t num_elements) {
         float* final_float_ptr;
         uint32_t num_spare_elements;
@@ -322,8 +342,9 @@ namespace daiet {
         int32_t exponent = ((*((int32_t*)(&max_float)) & 0x7f800000) >> 23)-126;
         exp->exp = rte_cpu_to_be_16((uint16_t) exponent);
     }
+#endif
 
-    __rte_always_inline void fill_int32(struct entry_hdr *entry, uint32_t virtual_tsi, uint32_t tensor_size) {
+    __rte_always_inline void fill_int32(struct entry_hdr *entry, uint32_t virtual_tsi, uint32_t tensor_size, uint32_t next_virtual_tsi) {
 
         uint32_t final_tsi;
         uint32_t tsi = virtual_tsi - batch_size;
@@ -349,22 +370,30 @@ namespace daiet {
         }
     }
 
-    __rte_always_inline void fill_float32(struct entry_hdr *entry, uint32_t virtual_tsi, uint32_t tensor_size) {
+    __rte_always_inline void fill_float32(struct entry_hdr *entry, uint32_t virtual_tsi, uint32_t tensor_size, uint32_t next_virtual_tsi) {
 
         float* cur_float_ptr;
         int32_t* cur_int_ptr;
         int32_t* final_int_ptr;
         float* final_float_ptr;
+#ifndef NOSCALING
         struct exp_hdr* exp;
+#endif
         uint32_t num_elements_fwd;
         uint32_t num_spare_elements;
         uint32_t tsi = virtual_tsi - batch_size;
+        uint32_t next_tsi = next_virtual_tsi - batch_size;
+        uint32_t final_tsi;
 
         cur_float_ptr = &(static_cast<float*>(tu.ptr)[tsi]);
         cur_int_ptr = static_cast<int32_t*>((void*) cur_float_ptr);
 
         if (likely(tsi + num_updates <= tensor_size)) {
-
+#ifdef NOSCALING
+            for (final_tsi = tsi + num_updates; tsi < final_tsi; tsi++, entry++) {
+                entry->upd = rte_cpu_to_be_32((static_cast<uint32_t*>(tu.ptr)[tsi]));
+            }
+#else
 #if MAX_VECTOR_SIZE >= 512
             num_spare_elements = num_updates % 16;
             for (final_float_ptr = cur_float_ptr + num_updates - num_spare_elements;
@@ -392,13 +421,26 @@ namespace daiet {
             exp = (struct exp_hdr *) (entry);
             tsi += batch_size;
 
-            if (likely(tsi<tensor_size)) {
-                cur_float_ptr = &(static_cast<float*>(tu.ptr)[tsi]);
-                num_elements_fwd = tensor_size - tsi > num_updates ? num_updates : tensor_size - tsi;
+            if (likely(next_tsi<tensor_size)) {
+                cur_float_ptr = &(static_cast<float*>(tu.ptr)[next_tsi]);
+                num_elements_fwd = tensor_size - next_tsi > num_updates ? num_updates : tensor_size - next_tsi;
                 fill_exponent(exp, cur_float_ptr, num_elements_fwd);
             }
 #endif
+#endif
         } else {
+#ifdef NOSCALING
+            //Padding
+            uint32_t num_valid = tensor_size - tsi;
+            uint32_t zeros = num_updates - num_valid;
+
+            //rte_memcpy(entry, &(static_cast<uint32_t*>(tu.ptr)[tsi]), sizeof(struct entry_hdr) * num_valid);
+            for (final_tsi = tsi + num_valid; tsi < final_tsi; tsi++, entry++) {
+                entry->upd = rte_cpu_to_be_32((static_cast<uint32_t*>(tu.ptr)[tsi]));
+            }
+
+            memset(entry, 0, sizeof(struct entry_hdr) * zeros);
+#else
             //Padding
             uint32_t num_valid = tensor_size - tsi;
             uint32_t zeros = num_updates - num_valid;
@@ -411,10 +453,11 @@ namespace daiet {
             }
 
             memset(entry, 0, sizeof(struct entry_hdr) * zeros);
+#endif
         }
     }
 
-    __rte_always_inline void fill_float16(struct entry_hdr *entry, uint32_t virtual_tsi, uint32_t tensor_size) {
+    __rte_always_inline void fill_float16(struct entry_hdr *entry, uint32_t virtual_tsi, uint32_t tensor_size, uint32_t next_virtual_tsi) {
 
         gloo::float16* cur_half_float_ptr;
         int32_t* cur_int_ptr;
@@ -422,7 +465,9 @@ namespace daiet {
         float* final_float_ptr;
         float float_buffer[num_updates];
         float* cur_float_ptr = float_buffer;
+#ifndef NOSCALING
         struct exp_hdr* exp;
+#endif
         uint32_t num_elements_fwd;
         uint32_t num_spare_elements;
         uint32_t tsi = virtual_tsi - batch_size;
@@ -431,7 +476,12 @@ namespace daiet {
         cur_int_ptr = static_cast<int32_t*>((void*) cur_float_ptr);
 
         if (likely(tsi + num_updates <= tensor_size)) {
-
+#ifdef NOSCALING
+            for (uint32_t i = 0; i < num_updates; i++,entry++) {
+                float tmp = gloo::cpu_half2float(cur_half_float_ptr[i]);
+                entry->upd = rte_cpu_to_be_32(((uint32_t*)&tmp)[0]);
+            }        
+#else
             for (uint32_t i = 0; i < num_updates; i++) {
                 cur_float_ptr[i] = gloo::cpu_half2float(cur_half_float_ptr[i]);
             }
@@ -484,7 +534,17 @@ namespace daiet {
                 fill_exponent(exp, cur_float_ptr, num_elements_fwd);
             }
 #endif
+#endif
         } else {
+#ifdef NOSCALING
+            uint32_t num_valid = tensor_size - tsi;
+            uint32_t zeros = num_updates - num_valid;
+            for (uint32_t i = 0; i < num_valid; i++,entry++) {
+                float tmp = gloo::cpu_half2float(cur_half_float_ptr[i]);
+                entry->upd = rte_cpu_to_be_32(((uint32_t*)&tmp)[0]);
+            }
+            memset(entry, 0, sizeof(struct entry_hdr) * zeros);       
+#else
             //Padding
             uint32_t num_valid = tensor_size - tsi;
             uint32_t zeros = num_updates - num_valid;
@@ -497,10 +557,14 @@ namespace daiet {
             }
 
             memset(entry, 0, sizeof(struct entry_hdr) * zeros);
+#endif
         }
     }
-
-    __rte_always_inline void reset_pkt(struct rte_ether_hdr * eth, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint64_t ol_flags) {
+#ifdef NOSCALING
+    __rte_always_inline void reset_pkt(struct rte_ether_hdr * eth, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint64_t ol_flags, uint32_t next_tsi, TensorUpdateType type) {
+#else
+    __rte_always_inline void reset_pkt(struct rte_ether_hdr * eth, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint64_t ol_flags, uint32_t next_tsi) {
+#endif
 
         struct rte_ipv4_hdr * const ip = (struct rte_ipv4_hdr *) (eth + 1);
         struct rte_udp_hdr * const udp = (struct rte_udp_hdr *) (ip + 1);
@@ -525,12 +589,20 @@ namespace daiet {
         daiet->tsi = virtual_tsi;
         // Swap msb
         daiet->pool_index = rte_cpu_to_be_16(tsi_to_pool_index(virtual_tsi));
-#ifndef NO_FILL_STORE
-        fill_fn(entry, virtual_tsi, tensor_size);
+        // Next tsi (Note do not change to big ending)
+        daiet->next_tsi = next_tsi;
+#ifdef NOSCALING
+        daiet->data_type = type;
 #endif
-    }
-
+#ifndef NO_FILL_STORE
+		fill_fn(entry, virtual_tsi, tensor_size, next_tsi);
+#endif
+	}
+#ifdef NOSCALING
+    __rte_always_inline uint16_t build_pkt(rte_mbuf* m, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint32_t next_tsi, TensorUpdateType type) {
+#else
     __rte_always_inline uint16_t build_pkt(rte_mbuf* m, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size) {
+#endif
 
         uint16_t pool_index = tsi_to_pool_index(virtual_tsi);
         uint32_t tsi;
@@ -538,13 +610,16 @@ namespace daiet {
         struct rte_ipv4_hdr *ip;
         struct rte_udp_hdr *udp;
         struct daiet_hdr *daiet;
-        struct entry_hdr *entry;
-        struct exp_hdr *exp;
+        struct entry_hdr *entry;   
         float* first_float_ptr;
         uint32_t num_elements_fwd;
         void *tmp;
-
+#ifdef NOSCALING
+        m->data_len = sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr) + sizeof(struct daiet_hdr) + entries_size;
+#else
+        struct exp_hdr *exp;
         m->data_len = sizeof(struct rte_ether_hdr) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr) + sizeof(struct daiet_hdr) + entries_size + sizeof(struct exp_hdr);
+#endif
         m->pkt_len = m->data_len;
 
         // Checksum offload
@@ -584,13 +659,23 @@ namespace daiet {
         daiet = (struct daiet_hdr *) (udp + 1);
         daiet->tsi = virtual_tsi;
         daiet->pool_index = rte_cpu_to_be_16(pool_index);
+#ifdef NOSCALING
+        daiet->next_tsi = next_tsi;
+        daiet->data_type = type;
+#else
+        daiet->next_tsi = virtual_tsi;
+#endif
 #ifndef NO_FILL_STORE
-		entry = (struct entry_hdr *) (daiet + 1);
-
+        entry = (struct entry_hdr *) (daiet + 1);
+#ifdef NOSCALING
+        if (virtual_tsi >= batch_size){
+            fill_fn(entry, virtual_tsi, tensor_size, virtual_tsi);
+        }
+#else
         if (virtual_tsi >= batch_size){
 
             // Retransmission
-            fill_fn(entry, virtual_tsi, tensor_size);
+            fill_fn(entry, virtual_tsi, tensor_size, virtual_tsi);
         } else {
             // First batch
             exp = (struct exp_hdr *) (entry + num_updates);
@@ -599,6 +684,7 @@ namespace daiet {
             num_elements_fwd = tensor_size - tsi > num_updates ? num_updates : tensor_size - tsi;
             fill_exponent(exp, first_float_ptr, num_elements_fwd);
         }
+#endif
 #endif
         return pool_index;
     }
@@ -703,6 +789,52 @@ namespace daiet {
 
     void worker_cleanup() {
     }
+    
+    bool is_zeroblock(uint32_t virtual_tsi){
+        if (virtual_tsi>=tensor_size+batch_size) {
+            return true;
+        }
+        uint32_t tsi_tmp  = virtual_tsi - batch_size;
+        for(uint32_t i=0;i<num_updates;i++) {
+            switch (tu.type) {
+                case INT32:
+                    if(static_cast<uint32_t *>(tu.ptr)[tsi_tmp+i]!=0){
+                        return false;
+                    }
+                    break;
+                case FLOAT32:
+                    if(static_cast<float *>(tu.ptr)[tsi_tmp+i]!=(float)(0.0)){
+                        return false;
+                    }
+                    break;
+                case FLOAT16:
+                    if(static_cast<gloo::float16*>(tu.ptr)[tsi_tmp+i]!=(gloo::float16)(0.0)){
+                        return false;
+                    }
+                    break;
+                default:
+                        LOG_FATAL("Tensor type error: " + to_string(tu.type));
+            }
+            
+        }
+        return true;
+    }
+
+    uint32_t find_nexttsi(uint32_t virtual_tsi, uint32_t sync_blocks) {
+        uint32_t nexttsi = virtual_tsi + batch_size;
+        uint32_t i = 0;
+        for(;i<sync_blocks && nexttsi<tensor_size+batch_size;nexttsi+=batch_size) {
+            //if tu[nexttsi-batchsize] is not zero
+            if(!is_zeroblock(nexttsi)) { 
+                return nexttsi;
+            }
+            i++;
+        }
+        if (nexttsi >= tensor_size+batch_size){
+            return UINT32_MAX;
+        }
+        return nexttsi;
+    }
 
     int worker(void* arg) {
 
@@ -713,13 +845,16 @@ namespace daiet {
         batch_size = max_num_pending_messages * num_updates;
 
         const uint16_t num_workers = daiet_par.getNumWorkers();
+        const uint32_t sync_blocks = daiet_par.getSyncBlocks();
 
         entries_size = sizeof(struct entry_hdr) * num_updates;
         shift = 0;
         tensor_size = 0;
         float scaling_factors[max_num_pending_messages];
+        uint32_t pool_next_tsi[max_num_pending_messages];
 
         volatile uint32_t rx_pkts = 0;
+        volatile bool* over_flag = new bool[max_num_pending_messages];
         uint64_t w_tx = 0, w_rx = 0;
 
         uint32_t total_num_msgs = 0;
@@ -767,7 +902,9 @@ namespace daiet {
 
         struct rte_ether_hdr* eth;
         struct daiet_hdr* daiet;
+#ifndef NOSCALING
         struct exp_hdr* exp;
+#endif
 
         uint32_t virtual_tsi = 0;
         uint16_t pool_index = 0;
@@ -811,11 +948,13 @@ namespace daiet {
         if (ret < 0)
             LOG_FATAL("Cannot set callback for tx buffer");
 
+#ifndef NOSCALING
         // Bitmap
         void* bitmap_mem;
         uint32_t bitmap_size;
         struct rte_bitmap *bitmap;
         uint32_t pkt_idx = 0;
+#endif
 
         // Allocate pkt burst
         pkts_tx_burst = (rte_mbuf **) rte_malloc_socket(NULL, max_num_pending_messages * sizeof(struct rte_mbuf*), RTE_CACHE_LINE_SIZE, socket_id);
@@ -841,7 +980,11 @@ namespace daiet {
 #endif
 
                 rx_pkts = 0;
+#ifdef NOSCALING
+                virtual_tsi = batch_size;
+#else
                 virtual_tsi = 0;
+#endif
                 tensor_size = tu.count;
 
                 total_num_msgs = tensor_size / num_updates;
@@ -849,13 +992,16 @@ namespace daiet {
                     total_num_msgs++; // one final padded packet
 
                 if (total_num_msgs > max_num_pending_messages){
-
+#ifndef NOSCALING
                     total_num_msgs += max_num_pending_messages;
+#endif
                     first_burst_size = max_num_pending_messages;
                 } else {
 
                     first_burst_size = total_num_msgs;
+#ifndef NOSCALING
                     total_num_msgs *= 2;
+#endif
                 }
 
                 switch (tu.type) {
@@ -894,6 +1040,7 @@ namespace daiet {
 #endif
 #endif
 
+#ifndef NOSCALING
                 // Initialize bitmap
                 bitmap_size = rte_bitmap_get_memory_footprint(total_num_msgs);
                 if (unlikely(bitmap_size == 0) && total_num_msgs>0) {
@@ -911,15 +1058,24 @@ namespace daiet {
                 }
                 if (total_num_msgs>0)
                     rte_bitmap_reset(bitmap);
+#endif
 
                 // Send first pkt burst
+
                 for (j = 0; j < first_burst_size; j++) {
                     m = pkts_tx_burst[j];
 
                     // Increase refcnt so it is not freed
                     rte_mbuf_refcnt_update(m,1);
 
+#ifdef NOSCALING
+                    uint32_t next_tsi = find_nexttsi(virtual_tsi, sync_blocks);
+                    pool_index_monoset = (build_pkt(m, dpdk_par.portid, virtual_tsi, tensor_size, next_tsi, tu.type) - start_pool_index) & 0x7FFF;
+                    pool_next_tsi[pool_index_monoset] = next_tsi;
+
+#else
                     pool_index_monoset = (build_pkt(m, dpdk_par.portid, virtual_tsi, tensor_size) - start_pool_index) & 0x7FFF;
+#endif
 
 #ifdef TIMERS
                     timer_tsis[pool_index_monoset] = virtual_tsi;
@@ -941,17 +1097,17 @@ namespace daiet {
                 sent = 0;
                 do {
                     nb_tx = rte_eth_tx_burst(dpdk_par.portid, worker_id, &pkts_tx_burst[sent], first_burst_size - sent);
-
                     sent += nb_tx;
 #ifdef DEBUG
                     LOG_DEBUG("First burst sent (worker " + to_string(worker_id) + "): " + to_string(nb_tx) + "/" + to_string(first_burst_size));
 #endif
-                } while (sent < first_burst_size);
+				} while (sent < first_burst_size);
 
                 w_tx += first_burst_size;
-
+                for(uint32_t i=0;i<max_num_pending_messages;i++){
+                    over_flag[i]=false;
+                }
                 while (rx_pkts < total_num_msgs && !force_quit) {
-
                     // Read packet from RX ring
                     nb_rx = rte_eth_rx_burst(dpdk_par.portid, worker_id, pkts_rx_burst, dpdk_par.burst_rx);
 
@@ -1000,24 +1156,22 @@ namespace daiet {
                                 daiet = (struct daiet_hdr *) ((uint8_t *) (eth+1) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr));
 #endif
                                 virtual_tsi = daiet->tsi;
-
-                                pkt_idx = virtual_tsi / num_updates;
-
                                 pool_index = rte_be_to_cpu_16(daiet->pool_index);
                                 // Clear msb
                                 pool_index_monoset = (pool_index - start_pool_index) & 0x7FFF;
 
                                 w_rx++;
-
+#ifndef NOSCALING
+                                pkt_idx = virtual_tsi / num_updates;
                                 if (likely(rte_bitmap_get(bitmap, pkt_idx) == 0)) {
-
+                                    rte_bitmap_set(bitmap, pkt_idx);
+#endif
                                     rx_pkts++;
 
 #ifdef TIMERS
                                     rte_timer_stop_sync(&timers[pool_index_monoset]);
 #endif
-
-                                    rte_bitmap_set(bitmap, pkt_idx);
+           
 #ifdef LATENCIES
                                     // Save latency
                                     save_latency(latencies, sent_timestamps, pool_index_monoset, lat_idx);
@@ -1029,39 +1183,62 @@ namespace daiet {
                                     // Save timestamp
                                     write_global_timestamp(global_sent_timestamps, pool_index_monoset);
 #endif
-#ifndef NO_FILL_STORE
+
                                     if (likely(virtual_tsi >= batch_size)) {
                                         // Store result
-
+#ifndef NO_FILL_STORE
+#ifndef NOSCALING
                                         scalingfactor = scaling_factors[pool_index_monoset];
                                         scalingfactor_vec = scalingfactor;
-
-                                        store_fn(daiet, tensor_size);
+#endif
+										store_fn(daiet, tensor_size);
+#endif
+                                        virtual_tsi = daiet->next_tsi;
+                                    }
+#ifndef NOSCALING
+                                    else {
+                                        virtual_tsi += batch_size;
                                     }
 #endif
 
-                                    virtual_tsi += batch_size;
 #ifdef TIMERS
                                     timer_tsis[pool_index_monoset] = virtual_tsi;
 #endif
-
                                     if (likely(virtual_tsi < tensor_size + batch_size)) {
 #ifndef NO_FILL_STORE
+#ifndef NOSCALING
                                         //Save scaling factor
                                         exp = (struct exp_hdr *) (((struct entry_hdr *) (daiet + 1)) + num_updates);
                                         scalingfactor = double(INT32_MAX) / (num_workers * powf(2,(int16_t)rte_be_to_cpu_16(exp->exp)));
                                         scalingfactor_vec = scalingfactor;
                                         scaling_factors[pool_index_monoset] = scalingfactor;
 #endif
-                                        //Resend the packet
-                                        reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags);
+#endif
+#ifdef NOSCALING
+                                        if(virtual_tsi==pool_next_tsi[pool_index_monoset]){
+#else
+                                        if((virtual_tsi-batch_size<batch_size) || (virtual_tsi==pool_next_tsi[pool_index_monoset])){
+#endif
+                                            //find the non-zero nextkey(+batch_size, +2batch_size, ...)
+                                            uint32_t next_tsi = find_nexttsi(virtual_tsi, sync_blocks);
+                                            pool_next_tsi[pool_index_monoset] = next_tsi;
+                                            //cout<<worker_id<<"-"<<lcore_id<<" current tsi: "<<virtual_tsi<<"; next tsi: "<<next_tsi<<"; tensor size: "<<tensor_size<<"; batch size: "<<batch_size<<endl;
+                                            //Resend the packet
+#ifdef NOSCALING
+                                            reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags, next_tsi, tu.type);
+#else
+                                            reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags, next_tsi);
+#endif
+                                            nb_tx = rte_eth_tx_buffer(dpdk_par.portid, worker_id, tx_buffer, m);
+                                            if (nb_tx) {
+                                                w_tx += nb_tx;
+                                                prev_tsc = cur_tsc;
+                                            }
 
-                                        nb_tx = rte_eth_tx_buffer(dpdk_par.portid, worker_id, tx_buffer, m);
-                                        if (nb_tx) {
-                                            w_tx += nb_tx;
-                                            prev_tsc = cur_tsc;
                                         }
-
+                                        else {
+                                            rte_pktmbuf_free(m);
+                                        }
 #ifdef TIMERS
                                         // Start timer
                                         rte_timer_reset_sync(&timers[pool_index_monoset], timer_cycles, PERIODICAL, lcore_id, resend_pkt,
@@ -1074,17 +1251,23 @@ namespace daiet {
                                     } else {
 
                                         // Free the packet
+                                        if (likely(virtual_tsi >= tensor_size + batch_size)) {
+                                            
+                                            uint16_t tmp_pool_index = (rte_be_to_cpu_16(daiet->pool_index) & 0x7FFF) - start_pool_index;
+                                            over_flag[tmp_pool_index] = true;
+                                        }
                                         rte_pktmbuf_free(m);
                                     }
+#ifndef NOSCALING
                                 } else {
                                     // We have seen this packet before
 #ifdef DEBUG
                                     LOG_DEBUG("Duplicated packet");
                                     print_packet(eth,m->data_len);
 #endif
-
                                     rte_pktmbuf_free(m);
                                 }
+#endif
 #ifdef DEBUG
                             } else {
 
@@ -1097,6 +1280,17 @@ namespace daiet {
 #endif
                         }
                     }
+                    bool completed=false;
+                    for(uint32_t i=0;i<max_num_pending_messages;i++){
+                        if (over_flag[i]==false) {
+                            completed = false;
+                            break;
+                        }
+                        completed = true;
+                    }
+                    if (completed){
+                        break;
+                    } 
                 }
                 // Done update
 
@@ -1108,9 +1302,10 @@ namespace daiet {
 
                 while (!dctx_ptr->send_result(tu.id) && !force_quit)
                     ;
-
+#ifndef NOSCALING
                 rte_bitmap_free(bitmap);
                 rte_free(bitmap_mem);
+#endif
 
 #ifdef LATENCIES
                 dump_latencies(latencies, total_num_msgs, string(hostname) + "-latency_round_" + to_string(round_ts) + "_id_" + to_string(worker_id) + "_usec.dat");

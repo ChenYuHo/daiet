@@ -1,9 +1,13 @@
-
+#include "malloc.h"
 // Align buffers to 32 bytes to support vectorized code
 const size_t kBufferAlignment = 32;
 
 template <typename T, int ALIGNMENT = kBufferAlignment>
 class aligned_allocator {
+  static_assert(
+      !(ALIGNMENT & (ALIGNMENT - 1)),
+      "alignment must be a power of 2");
+
  public:
   using value_type = T;
   using pointer = value_type*;
@@ -25,6 +29,7 @@ class aligned_allocator {
   inline pointer address(reference r) {
     return &r;
   }
+
   inline const_pointer address(const_reference r) {
     return &r;
   }
@@ -32,8 +37,12 @@ class aligned_allocator {
   inline pointer allocate(
       size_type sz,
       typename std::allocator<void>::const_pointer = 0) {
-    auto x = memalign(ALIGNMENT, sizeof(T) * sz);
-    return reinterpret_cast<pointer>(x);
+    pointer p;
+    if (posix_memalign(
+            reinterpret_cast<void**>(&p), ALIGNMENT, sizeof(T) * sz)) {
+      abort();
+    }
+    return p;
   }
 
   void deallocate(pointer p, size_type /*sz*/) {

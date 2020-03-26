@@ -27,6 +27,11 @@ HDRS := $(shell find ${PS_PATH}/src -maxdepth 1 -name "*.hpp" -o -name "*.h")
 CXXFLAGS += -Wall -Wextra -std=c++11 -fPIC -I ${DAIET_PATH}/lib/
 LDFLAGS += -lstdc++ -l boost_program_options -l boost_system
 
+ifeq ($(NOSCALING),ON)
+$(info "NOSCALING ON")
+CXXFLAGS += -DNOSCALING
+endif
+
 ifeq ($(DEBUG),ON)
 $(info "DEBUG ON")
 CXXFLAGS += -DDEBUG -g -O0

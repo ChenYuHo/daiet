@@ -232,14 +232,15 @@ namespace daiet {
                         s << "Entry " + to_string(i) + ": " << to_string((int32_t) rte_be_to_cpu_32(entry->upd)) << endl;
                         entry++;
                     }
-
+#ifndef NOSCALING
                     if (size >= idx + sizeof(struct exp_hdr)) {
 
                         idx += sizeof(struct exp_hdr);
                         struct exp_hdr* exp = (struct exp_hdr *) (entry);
                         s << "Exponent: " << to_string((int16_t)rte_be_to_cpu_16(exp->exp)) << endl;
                     }
-                }
+#endif
+				}
             }
         }
         s << "*******" << endl;

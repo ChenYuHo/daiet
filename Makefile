@@ -53,6 +53,10 @@ $(info "TIMERS ON")
 CXXFLAGS += -DTIMERS
 endif
 
+ifeq ($(NOSCALING),ON)
+$(info "NOSCALING ON")
+CXXFLAGS += -DNOSCALING
+
 ifeq ($(COUNTERS),ON)
 $(info "COUNTERS ON")
 CXXFLAGS += -DCOUNTERS
