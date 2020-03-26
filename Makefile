@@ -56,6 +56,7 @@ endif
 ifeq ($(NOSCALING),ON)
 $(info "NOSCALING ON")
 CXXFLAGS += -DNOSCALING
+endif
 
 ifeq ($(COUNTERS),ON)
 $(info "COUNTERS ON")
