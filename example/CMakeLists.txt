@@ -18,8 +18,8 @@ endif()
 
 add_definitions("-DHIREDIS_NESTED_INCLUDE")
 
+include_directories(${CMAKE_SOURCE_DIR}/../../gloo)
 include_directories(${CMAKE_SOURCE_DIR}/../build/include)
-include_directories(${CMAKE_SOURCE_DIR}/../..)
 link_directories(${CMAKE_SOURCE_DIR}/../build)
 link_directories(${CMAKE_SOURCE_DIR}/../lib/dpdk/build/lib)
 
