@@ -25,7 +25,7 @@ SRCS-y := $(shell find ${DAIET_PATH}/src -maxdepth 1 -name "*.cpp")
 HDRS := $(shell find ${DAIET_PATH}/src -maxdepth 1 -name "*.hpp" -o -name "*.h")
 
 #SIMDFLAGS = -msse2 -mssse3 -msse4.1 -msse4.2 -mavx -fabi-version=0 -mfma -mavx2 -mavx512f -mavx512dq -mavx512cd -mavx512bw -mavx512vl 
-CXXFLAGS += -Wall -Wextra -std=c++11 -fPIC -I ${DAIET_PATH}/.. -I ${DAIET_PATH}/lib/
+CXXFLAGS += -Wall -Wextra -std=c++11 -fPIC -I ${DAIET_PATH}/../gloo/ -I ${DAIET_PATH}/lib/
 LDFLAGS += -lstdc++ -l boost_program_options
 
 ifeq ($(COLOCATED),ON)
