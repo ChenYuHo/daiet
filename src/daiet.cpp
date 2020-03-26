@@ -204,9 +204,14 @@ namespace daiet {
         if (ret < 0)
             LOG_FATAL("Cannot configure port: " + string(rte_strerror(ret)));
 
+#ifdef MLX
         // Fix for mlx5 driver ring size overflow
+        dpdk_par.port_rx_ring_size = 4096;
+        dpdk_par.port_tx_ring_size = 4096;
+#else
         dpdk_par.port_rx_ring_size = dev_info.rx_desc_lim.nb_max < 1024 ? dev_info.rx_desc_lim.nb_max : 1024;
         dpdk_par.port_tx_ring_size = dev_info.tx_desc_lim.nb_max < 1024 ? dev_info.tx_desc_lim.nb_max : 1024;
+#endif
 
         // Check that numbers of Rx and Tx descriptors satisfy descriptors
         // limits from the ethernet device information, otherwise adjust

@@ -33,6 +33,11 @@ $(info "COLOCATED ON")
 CXXFLAGS += -DCOLOCATED
 endif
 
+ifeq ($(MLX),ON)
+$(info "MLX ON")
+CXXFLAGS += -DMLX
+endif
+
 ifeq ($(LATENCIES),ON)
 $(info "LATENCIES ON")
 CXXFLAGS += -DLATENCIES
