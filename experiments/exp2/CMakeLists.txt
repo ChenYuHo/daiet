@@ -1,16 +1,17 @@
+project(switchml)
 cmake_minimum_required(VERSION 3.5)
 find_package(MPI)
 
 set(USE_VANILLA_DEFAULT OFF)
-set(USE_MLX5 OFF)
-set(USE_MLX4 OFF)
-set(DEBUG OFF)
+set(USE_MLX5_DEFAULT OFF)
+set(USE_MLX4_DEFAULT OFF)
+set(DEBUG_DEFAULT OFF)
 
 # Options
 option(USE_VANILLA "Use vanilla version of gloo" ${USE_VANILLA_DEFAULT})
 option(USE_MLX5 "Use MLX5 and ibverbs" ${USE_MLX5_DEFAULT})
 option(USE_MLX4 "Use MLX4 and ibverbs" ${USE_MLX4_DEFAULT})
-option(DEBUG "Compile in debug mode" OFF)
+option(DEBUG "Compile in debug mode" ${DEBUG_DEFAULT})
 
 if(DEBUG)
     message(WARNING "Compile in debug mode")
@@ -39,10 +40,6 @@ add_executable(float32 float32.cc)
 add_executable(int32 int32.cc)
 add_executable(switchml_dense switchml_dense.cc)
 
-target_link_libraries(float16 gloo hiredis pthread)
-target_link_libraries(float32 gloo hiredis pthread)
-target_link_libraries(int32 gloo hiredis pthread)
-target_link_libraries(switchml_dense gloo hiredis pthread ${MPI_C_LIBRARIES})
 
 if(NOT USE_VANILLA)
     target_link_libraries(float16 -Wl,--whole-archive daiet dpdk -Wl,--no-whole-archive dl numa boost_chrono boost_system boost_thread boost_program_options)
@@ -63,3 +60,8 @@ if(USE_MLX4)
     target_link_libraries(int32 ibverbs mlx4 mnl)
     target_link_libraries(switchml_dense ibverbs mlx4 mnl)
 endif()
+
+target_link_libraries(float16 gloo hiredis pthread)
+target_link_libraries(float32 gloo hiredis pthread)
+target_link_libraries(int32 gloo hiredis pthread)
+target_link_libraries(switchml_dense gloo hiredis pthread ${MPI_C_LIBRARIES})
