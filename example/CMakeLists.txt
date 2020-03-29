@@ -1,13 +1,14 @@
+project(switchml)
 cmake_minimum_required(VERSION 3.5)
 
-set(USE_MLX5 OFF)
-set(USE_MLX4 OFF)
-set(DEBUG OFF)
+set(USE_MLX5_DEFAULT OFF)
+set(USE_MLX4_DEFAULT OFF)
+set(DEBUG_DEFAULT OFF)
 
 # Options
 option(USE_MLX5 "Use MLX5 and ibverbs" ${USE_MLX5_DEFAULT})
 option(USE_MLX4 "Use MLX4 and ibverbs" ${USE_MLX4_DEFAULT})
-option(DEBUG "Compile in debug mode" OFF)
+option(DEBUG "Compile in debug mode" ${DEBUG_DEFAULT})
 
 if(DEBUG)
     message(WARNING "Compile in debug mode")
