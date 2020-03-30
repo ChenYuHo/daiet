@@ -25,6 +25,10 @@ namespace daiet {
             int start_idx;
             int32_t id;
             TensorUpdateType type;
+#ifdef OFFLOAD_BITMAP
+            uint8_t* bitmap_ptr;
+            int block_count;
+#endif
     };
 
     /* Singleton class*/
@@ -52,6 +56,12 @@ namespace daiet {
             void StartMaster();
             void StopMaster();
 
+#ifdef OFFLOAD_BITMAP
+            void AllReduce(gloo::float16*, int, uint8_t*, int);
+            void AllReduce(float*, int, uint8_t*, int);
+            void AllReduce(int32_t*, int, uint8_t*, int);
+            static const uint32_t block_size = 256;
+#endif
             void AllReduce(gloo::float16*, int);
             void AllReduce(float*, int);
             void AllReduce(int32_t*, int);

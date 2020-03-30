@@ -795,6 +795,9 @@ namespace daiet {
             return true;
         }
         uint32_t tsi_tmp  = virtual_tsi - batch_size;
+#ifdef OFFLOAD_BITMAP
+        return bool((tu.bitmap_ptr)[tsi_tmp/num_updates]);
+#else
         for(uint32_t i=0;i<num_updates;i++) {
             switch (tu.type) {
                 case INT32:
@@ -818,6 +821,7 @@ namespace daiet {
             
         }
         return true;
+#endif
     }
 
     uint32_t find_nexttsi(uint32_t virtual_tsi, uint32_t sync_blocks) {
@@ -1023,6 +1027,9 @@ namespace daiet {
                     default:
                         LOG_FATAL("Tensor type error: " + to_string(tu.type));
                 }
+#ifdef OFFLOAD_BITMAP
+                tu.bitmap_ptr = (tu.bitmap_ptr) + (tu.start_idx / num_updates);
+#endif
 
 #ifdef LATENCIES
                 uint64_t latencies[total_num_msgs];

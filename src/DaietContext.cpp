@@ -72,7 +72,14 @@ namespace daiet {
         tu = *tensor_update_ptr; // Copy
 
         if (data_ready != 1){
+#ifdef OFFLOAD_BITMAP
+            tu.block_count /= num_worker_threads;
+            if (tu.block_count%num_worker_threads>worker_id)
+                tu.block_count += 1;
+            tu.count = tu.block_count * block_size;
+#else
             tu.count /= num_worker_threads;
+#endif
         } else {
             tu.count -= tu.start_idx;
         }
@@ -136,6 +143,22 @@ namespace daiet {
 
     }
 
+#ifdef OFFLOAD_BITMAP
+    void DaietContext::AllReduce(gloo::float16* ptr, int count, uint8_t* bitmap_ptr, int block_count) {
+        int32_t tensor_id = tid_counter.fetch_add(1)+1;
+        TensorUpdate tu;
+        tu.ptr = ptr;
+        tu.count = count;
+        tu.start_idx = 0;
+        tu.id = tensor_id;
+        tu.type = FLOAT16;
+        tu.bitmap_ptr = bitmap_ptr;
+        tu.block_count = block_count;
+        send_tensor(&tu);
+        receive_result(tensor_id);
+    }
+#endif
+
     void DaietContext::AllReduce(gloo::float16* ptr, int count) {
 
         int32_t tensor_id = tid_counter.fetch_add(1)+1;
@@ -150,6 +173,22 @@ namespace daiet {
         receive_result(tensor_id);
     }
 
+#ifdef OFFLOAD_BITMAP
+    void DaietContext::AllReduce(float* ptr, int count, uint8_t* bitmap_ptr, int block_count) {
+        int32_t tensor_id = tid_counter.fetch_add(1)+1;
+        TensorUpdate tu;
+        tu.ptr = ptr;
+        tu.count = count;
+        tu.start_idx = 0;
+        tu.id = tensor_id;
+        tu.type = FLOAT32;
+        tu.bitmap_ptr = bitmap_ptr;
+        tu.block_count = block_count;
+        send_tensor(&tu);
+        receive_result(tensor_id);
+    }
+#endif
+
     void DaietContext::AllReduce(float* ptr, int count) {
 
         int32_t tensor_id = tid_counter.fetch_add(1)+1;
@@ -163,6 +202,22 @@ namespace daiet {
         send_tensor(&tu);
         receive_result(tensor_id);
     }
+
+#ifdef OFFLOAD_BITMAP
+    void DaietContext::AllReduce(int32_t* ptr, int count, uint8_t* bitmap_ptr, int block_count) {
+        int32_t tensor_id = tid_counter.fetch_add(1)+1;
+        TensorUpdate tu;
+        tu.ptr = ptr;
+        tu.count = count;
+        tu.start_idx = 0;
+        tu.id = tensor_id;
+        tu.type = INT32;
+        tu.bitmap_ptr = bitmap_ptr;
+        tu.block_count = block_count;
+        send_tensor(&tu);
+        receive_result(tensor_id);
+    }
+#endif
 
     void DaietContext::AllReduce(int32_t* ptr, int count) {
 

@@ -75,6 +75,11 @@ else
 CXXFLAGS += -O3
 endif
 
+ifeq ($(OFFLOAD_BITMAP),ON)
+$(info "OFFLOAD BITMAP ON")
+CXXFLAGS += -DOFFLOAD_BITMAP
+endif
+
 .PHONY: local_install
 local_install: _postbuild
 	$(Q)$(MAKE) clean
