@@ -952,13 +952,11 @@ namespace daiet {
         if (ret < 0)
             LOG_FATAL("Cannot set callback for tx buffer");
 
-#ifndef NOSCALING
         // Bitmap
         void* bitmap_mem;
         uint32_t bitmap_size;
         struct rte_bitmap *bitmap;
         uint32_t pkt_idx = 0;
-#endif
 
         // Allocate pkt burst
         pkts_tx_burst = (rte_mbuf **) rte_malloc_socket(NULL, max_num_pending_messages * sizeof(struct rte_mbuf*), RTE_CACHE_LINE_SIZE, socket_id);
@@ -1047,7 +1045,6 @@ namespace daiet {
 #endif
 #endif
 
-#ifndef NOSCALING
                 // Initialize bitmap
                 bitmap_size = rte_bitmap_get_memory_footprint(total_num_msgs);
                 if (unlikely(bitmap_size == 0) && total_num_msgs>0) {
@@ -1065,7 +1062,6 @@ namespace daiet {
                 }
                 if (total_num_msgs>0)
                     rte_bitmap_reset(bitmap);
-#endif
 
                 // Send first pkt burst
 
@@ -1168,11 +1164,13 @@ namespace daiet {
                                 pool_index_monoset = (pool_index - start_pool_index) & 0x7FFF;
 
                                 w_rx++;
-#ifndef NOSCALING
+#ifdef NOSCALING
+                                pkt_idx = (virtual_tsi-batch_size) / num_updates;
+#else
                                 pkt_idx = virtual_tsi / num_updates;
+#endif
                                 if (likely(rte_bitmap_get(bitmap, pkt_idx) == 0)) {
                                     rte_bitmap_set(bitmap, pkt_idx);
-#endif
                                     rx_pkts++;
 
 #ifdef TIMERS
@@ -1243,6 +1241,16 @@ namespace daiet {
                                             }
 
                                         }
+#ifdef ALGO2
+                                        else if(virtual_tsi<pool_next_tsi[pool_index_monoset]) {
+                                            reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags, pool_next_tsi[pool_index_monoset], tu.type);
+                                            nb_tx = rte_eth_tx_buffer(dpdk_par.portid, worker_id, tx_buffer, m);
+                                            if (nb_tx) {
+                                                w_tx += nb_tx;
+                                                prev_tsc = cur_tsc;
+                                            }
+                                        } 
+#endif
                                         else {
                                             rte_pktmbuf_free(m);
                                         }
@@ -1265,7 +1273,6 @@ namespace daiet {
                                         }
                                         rte_pktmbuf_free(m);
                                     }
-#ifndef NOSCALING
                                 } else {
                                     // We have seen this packet before
 #ifdef DEBUG
@@ -1274,7 +1281,6 @@ namespace daiet {
 #endif
                                     rte_pktmbuf_free(m);
                                 }
-#endif
 #ifdef DEBUG
                             } else {
 
@@ -1309,10 +1315,8 @@ namespace daiet {
 
                 while (!dctx_ptr->send_result(tu.id) && !force_quit)
                     ;
-#ifndef NOSCALING
                 rte_bitmap_free(bitmap);
                 rte_free(bitmap_mem);
-#endif
 
 #ifdef LATENCIES
                 dump_latencies(latencies, total_num_msgs, string(hostname) + "-latency_round_" + to_string(round_ts) + "_id_" + to_string(worker_id) + "_usec.dat");

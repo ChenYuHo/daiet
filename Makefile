@@ -58,6 +58,11 @@ $(info "NOSCALING ON")
 CXXFLAGS += -DNOSCALING
 endif
 
+ifeq ($(ALGO2),ON)
+$(info "ALGO2 ON")
+CXXFLAGS += -DALGO2
+endif
+
 ifeq ($(COUNTERS),ON)
 $(info "COUNTERS ON")
 CXXFLAGS += -DCOUNTERS

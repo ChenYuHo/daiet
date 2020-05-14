@@ -32,6 +32,11 @@ $(info "NOSCALING ON")
 CXXFLAGS += -DNOSCALING
 endif
 
+ifeq ($(ALGO2),ON)
+$(info "ALGO2 ON")
+CXXFLAGS += -DALGO2
+endif
+
 ifeq ($(DEBUG),ON)
 $(info "DEBUG ON")
 CXXFLAGS += -DDEBUG -g -O0

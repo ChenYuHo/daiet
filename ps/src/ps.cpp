@@ -39,6 +39,7 @@ namespace daiet {
 
     thread_local static uint16_t ps_port_be;
     thread_local static worker_info** ps_workers_info;
+    thread_local static uint32_t* min_next_tsi;
 
 #ifdef DEBUG
     __rte_always_inline struct daiet_hdr * is_daiet_pkt_to_ps(struct rte_ether_hdr* eth_hdr, uint16_t size) {
@@ -74,21 +75,8 @@ namespace daiet {
 
         struct entry_hdr *entry;
         int32_t* base_ptr = ps_aggregated_messages[pool_index];
+#ifndef NOSCALING
         worker_info* winfo_ptr = ps_workers_info[pool_index];
-#ifdef NOSCALING
-        bool over_flag = true;
-        for (uint16_t i = 0; i<num_workers; i++){
-            if (UINT32_MAX != winfo_ptr[i].next_tsi) {
-                over_flag = false;
-                break;
-            }
-        }
-        if (over_flag) {
-            for (uint16_t i = 0; i<num_workers; i++){
-                winfo_ptr[i].next_tsi = 0;
-            }    
-        }
-#else
         struct exp_hdr * exp = (struct exp_hdr *) (((struct entry_hdr *) (daiet + 1)) + num_updates);
         int16_t max_exp = -126;
         for (uint16_t i = 0; i<num_workers; i++){
@@ -98,6 +86,9 @@ namespace daiet {
             }
         }
         exp->exp = rte_cpu_to_be_16((uint16_t) max_exp);
+#endif
+#ifdef ALGO2
+        min_next_tsi[pool_index] = UINT32_MAX;
 #endif
         //cout<<"broadcast tsi: "<<daiet->tsi<<"; next tsi: "<<daiet->next_tsi<<endl;
         entry = (struct entry_hdr *) (daiet + 1);
@@ -112,6 +103,10 @@ namespace daiet {
 
         struct entry_hdr * entry = (struct entry_hdr *) (daiet + 1);
         worker_info* winfo_ptr = ps_workers_info[pool_index];
+#ifdef ALGO2
+        if (min_next_tsi[pool_index]>daiet->next_tsi) min_next_tsi[pool_index]=daiet->next_tsi;
+        ps_received_message_counters[pool_index]--;
+#endif
 #ifdef NOSCALING
         switch (daiet->data_type) {
             case INT32:
@@ -180,14 +175,17 @@ namespace daiet {
 
                 ps_workers_ip_to_mac[known_workers].mac = src_mac;
                 ps_workers_ip_to_mac[known_workers].be_ip = be_src_ip;
+#ifndef ALGO2
                 winfo_ptr[known_workers].worker_ip = be_src_ip;
                 winfo_ptr[known_workers].next_tsi = daiet->next_tsi;
+#endif
 #ifndef NOSCALING
                 winfo_ptr[known_workers].next_exp = (int16_t)rte_be_to_cpu_16(exp->exp);
 #endif
                 known_workers++;
             }
         }
+#ifndef ALGO2
         else {
             for (uint32_t i = 0; i < num_workers; i++) {
                 if (ps_workers_ip_to_mac[i].be_ip==be_src_ip){
@@ -213,13 +211,26 @@ namespace daiet {
                 min_nexttsi = winfo_ptr[i].next_tsi;
             }
         }
-        //change the condition of broadcasting aggregated gradients
+#endif        
 #ifdef NOSCALING
+#ifdef ALGO2
+        if (unlikely(ps_received_message_counters[pool_index]==0)) {
+#else
         if (daiet->tsi < min_nexttsi) {
+            if(min_nexttsi==UINT32_MAX){
+                for (uint16_t i = 0; i<num_workers; i++)
+                    winfo_ptr[i].next_tsi = 0;
+            }
+#endif
 #else
         if (all_equal || daiet->tsi < min_nexttsi) {
 #endif
+#ifdef ALGO2
+            ps_received_message_counters[pool_index] = num_workers;
+            daiet->next_tsi = min_next_tsi[pool_index];
+#else
             daiet->next_tsi = min_nexttsi;
+#endif
             return true;
         }
         return false;
@@ -293,6 +304,7 @@ namespace daiet {
             }
         }
 
+#ifdef ALGO2
         ps_received_message_counters = (uint32_t*) rte_zmalloc_socket(NULL, max_num_pending_messages * sizeof(uint32_t), RTE_CACHE_LINE_SIZE, rte_socket_id());
         if (ps_received_message_counters == NULL)
             LOG_FATAL("Failed PS aggregated messages allocation!");
@@ -300,6 +312,15 @@ namespace daiet {
         for (i = 0; i < max_num_pending_messages; i++) {
             ps_received_message_counters[i] = num_workers;
         }
+        
+        min_next_tsi = (uint32_t*) rte_zmalloc_socket(NULL, max_num_pending_messages * sizeof(uint32_t), RTE_CACHE_LINE_SIZE, rte_socket_id());
+        if (min_next_tsi == NULL)
+            LOG_FATAL("Failed PS min next tsi allocation!");
+
+        for (i = 0; i < max_num_pending_messages; i++) {
+            min_next_tsi[i] = UINT32_MAX;
+        }        
+#endif
 
         ps_workers_ip_to_mac = (mac_ip_pair*) rte_zmalloc_socket(NULL, num_workers * sizeof(struct mac_ip_pair), RTE_CACHE_LINE_SIZE, rte_socket_id());
         if (ps_workers_ip_to_mac == NULL)
@@ -416,9 +437,10 @@ namespace daiet {
         rte_free(pkts_burst);
 
         rte_free(ps_workers_ip_to_mac);
-
+#ifdef ALGO2
         rte_free(ps_received_message_counters);
-
+        rte_free(min_next_tsi);
+#endif
         for (uint32_t i = 0; i < num_updates; i++) {
             rte_free(ps_aggregated_messages[i]);
         }
