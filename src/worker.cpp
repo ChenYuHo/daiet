@@ -38,6 +38,7 @@ namespace daiet {
     thread_local static size_t entries_size;
     thread_local static uint16_t start_pool_index;
     thread_local static uint16_t shift;
+    thread_local static uint8_t *pool_set = (uint8_t *)malloc(sizeof(uint8_t)*daiet_par.getMaxNumPendingMessages());
 
     thread_local static float scalingfactor;
 
@@ -157,7 +158,20 @@ namespace daiet {
     }
 #endif
 #endif
+#ifdef TIMERS
+    __rte_always_inline uint16_t tsi_to_pool_index(const uint32_t& tsi, uint8_t set) {
 
+        uint32_t i = ((tsi / num_updates) ) % ( daiet_par.getMaxNumPendingMessages());
+        if (set==1)
+            pool_set[i]=(pool_set[i]+1)%2;
+        if (pool_set[i]==0)
+            // Set 0
+            return (start_pool_index + i);
+        else
+            // Set 1
+            return ((start_pool_index + i) | 0x8000);
+    }
+#else
     __rte_always_inline uint16_t tsi_to_pool_index(const uint32_t& tsi) {
 
         uint32_t i = ((tsi / num_updates) + shift) % (2 * daiet_par.getMaxNumPendingMessages());
@@ -168,7 +182,7 @@ namespace daiet {
             // Set 1
             return ((start_pool_index + (i - daiet_par.getMaxNumPendingMessages())) | 0x8000);
     }
-
+#endif
     __rte_always_inline void store_int32(daiet_hdr* daiet, uint32_t tensor_size) {
 
         uint32_t tsi = daiet->tsi - batch_size;
@@ -561,9 +575,16 @@ namespace daiet {
         }
     }
 #ifdef NOSCALING
+#ifdef TIMERS
+    __rte_always_inline void reset_pkt(struct rte_ether_hdr * eth, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint64_t ol_flags, uint32_t next_tsi, TensorUpdateType type, uint8_t set) {
+        uint16_t pool_index = tsi_to_pool_index(virtual_tsi, set);
+#else
     __rte_always_inline void reset_pkt(struct rte_ether_hdr * eth, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint64_t ol_flags, uint32_t next_tsi, TensorUpdateType type) {
+        uint16_t pool_index = tsi_to_pool_index(virtual_tsi);
+#endif
 #else
     __rte_always_inline void reset_pkt(struct rte_ether_hdr * eth, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint64_t ol_flags, uint32_t next_tsi) {
+        uint16_t pool_index = tsi_to_pool_index(virtual_tsi);
 #endif
 
         struct rte_ipv4_hdr * const ip = (struct rte_ipv4_hdr *) (eth + 1);
@@ -588,7 +609,7 @@ namespace daiet {
         // DAIET header
         daiet->tsi = virtual_tsi;
         // Swap msb
-        daiet->pool_index = rte_cpu_to_be_16(tsi_to_pool_index(virtual_tsi));
+        daiet->pool_index = rte_cpu_to_be_16(pool_index);
         // Next tsi (Note do not change to big ending)
         daiet->next_tsi = next_tsi;
 #ifdef NOSCALING
@@ -599,12 +620,19 @@ namespace daiet {
 #endif
 	}
 #ifdef NOSCALING
+#ifdef TIMERS
+    __rte_always_inline uint16_t build_pkt(rte_mbuf* m, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint32_t next_tsi, TensorUpdateType type, uint8_t set) {
+        uint16_t pool_index = tsi_to_pool_index(virtual_tsi, set);
+#else
     __rte_always_inline uint16_t build_pkt(rte_mbuf* m, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size, uint32_t next_tsi, TensorUpdateType type) {
+        uint16_t pool_index = tsi_to_pool_index(virtual_tsi);
+#endif
 #else
     __rte_always_inline uint16_t build_pkt(rte_mbuf* m, unsigned portid, uint32_t virtual_tsi, uint32_t tensor_size) {
+        uint16_t pool_index = tsi_to_pool_index(virtual_tsi);
 #endif
 
-        uint16_t pool_index = tsi_to_pool_index(virtual_tsi);
+        
         uint32_t tsi;
         struct rte_ether_hdr *eth;
         struct rte_ipv4_hdr *ip;
@@ -721,8 +749,9 @@ namespace daiet {
 
 #ifdef TIMERS
     void resend_pkt(struct rte_timer *timer, void *arg) {
-
-        uint32_t virtual_tsi = *((uint32_t*) arg);
+        uint32_t *data = (uint32_t*) arg;
+        uint32_t virtual_tsi = data[0];
+        uint32_t next_tsi = data[1];
 
         LOG_DEBUG("Timeout virtual TSI: " + to_string(virtual_tsi));
 
@@ -735,7 +764,7 @@ namespace daiet {
             LOG_FATAL("Cannot allocate one packet");
         }
 
-        uint32_t pool_index_monoset = build_pkt(m[0], dpdk_par.portid, virtual_tsi, tensor_size) & 0x7FFF;
+        uint32_t pool_index_monoset = build_pkt(m[0], dpdk_par.portid, virtual_tsi, tensor_size, next_tsi, tu.type, 0) & 0x7FFF;
 
         while (rte_eth_tx_burst(dpdk_par.portid, worker_id, m, 1)==0)
             ;
@@ -856,6 +885,8 @@ namespace daiet {
         tensor_size = 0;
         float scaling_factors[max_num_pending_messages];
         uint32_t pool_next_tsi[max_num_pending_messages];
+        std::cout<<"call worker now!"<<std::endl;
+        memset(pool_set, 0, max_num_pending_messages*sizeof(uint8_t));
 
         volatile uint32_t rx_pkts = 0;
         volatile bool* over_flag = new bool[max_num_pending_messages];
@@ -893,7 +924,7 @@ namespace daiet {
         struct rte_mempool *pool;
 #else
         struct rte_timer timers[max_num_pending_messages];
-        uint32_t timer_tsis[max_num_pending_messages];
+        uint32_t timer_tsis[max_num_pending_messages][2];
 #endif
         string pool_name = "worker_pool";
         struct rte_mbuf **pkts_tx_burst;
@@ -1073,16 +1104,24 @@ namespace daiet {
 
 #ifdef NOSCALING
                     uint32_t next_tsi = find_nexttsi(virtual_tsi, sync_blocks);
+#ifdef TIMERS
+                    
+                    pool_index_monoset = (build_pkt(m, dpdk_par.portid, virtual_tsi, tensor_size, next_tsi, tu.type, 1) - start_pool_index) & 0x7FFF;
+                    pool_next_tsi[pool_index_monoset] = next_tsi;
+#else
                     pool_index_monoset = (build_pkt(m, dpdk_par.portid, virtual_tsi, tensor_size, next_tsi, tu.type) - start_pool_index) & 0x7FFF;
                     pool_next_tsi[pool_index_monoset] = next_tsi;
+#endif
+                    
 
 #else
                     pool_index_monoset = (build_pkt(m, dpdk_par.portid, virtual_tsi, tensor_size) - start_pool_index) & 0x7FFF;
 #endif
 
 #ifdef TIMERS
-                    timer_tsis[pool_index_monoset] = virtual_tsi;
-                    rte_timer_reset_sync(&timers[pool_index_monoset], timer_cycles * max_num_pending_messages, PERIODICAL, lcore_id, resend_pkt, &(timer_tsis[pool_index_monoset]));
+                    timer_tsis[pool_index_monoset][0] = virtual_tsi;
+                    timer_tsis[pool_index_monoset][1] = next_tsi;
+                    rte_timer_reset_sync(&timers[pool_index_monoset], timer_cycles * max_num_pending_messages, PERIODICAL, lcore_id, resend_pkt, &(timer_tsis[pool_index_monoset][0]));
 #endif
 
 #ifdef COUNTERS
@@ -1207,7 +1246,7 @@ namespace daiet {
 #endif
 
 #ifdef TIMERS
-                                    timer_tsis[pool_index_monoset] = virtual_tsi;
+                                    timer_tsis[pool_index_monoset][0] = virtual_tsi;
 #endif
                                     if (likely(virtual_tsi < tensor_size + batch_size)) {
 #ifndef NO_FILL_STORE
@@ -1230,7 +1269,11 @@ namespace daiet {
                                             //cout<<worker_id<<"-"<<lcore_id<<" current tsi: "<<virtual_tsi<<"; next tsi: "<<next_tsi<<"; tensor size: "<<tensor_size<<"; batch size: "<<batch_size<<endl;
                                             //Resend the packet
 #ifdef NOSCALING
+#ifdef TIMERS
+                                            reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags, next_tsi, tu.type, 1);
+#else
                                             reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags, next_tsi, tu.type);
+#endif
 #else
                                             reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags, next_tsi);
 #endif
@@ -1243,7 +1286,11 @@ namespace daiet {
                                         }
 #ifdef ALGO2
                                         else if(virtual_tsi<pool_next_tsi[pool_index_monoset]) {
+#ifdef TIMERS
+                                            reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags, pool_next_tsi[pool_index_monoset], tu.type, 1);
+#else
                                             reset_pkt(eth, dpdk_par.portid, virtual_tsi, tensor_size, m->ol_flags, pool_next_tsi[pool_index_monoset], tu.type);
+#endif
                                             nb_tx = rte_eth_tx_buffer(dpdk_par.portid, worker_id, tx_buffer, m);
                                             if (nb_tx) {
                                                 w_tx += nb_tx;
@@ -1256,8 +1303,9 @@ namespace daiet {
                                         }
 #ifdef TIMERS
                                         // Start timer
+                                        timer_tsis[pool_index_monoset][1] = pool_next_tsi[pool_index_monoset];
                                         rte_timer_reset_sync(&timers[pool_index_monoset], timer_cycles, PERIODICAL, lcore_id, resend_pkt,
-                                                &timer_tsis[pool_index_monoset]);
+                                                &(timer_tsis[pool_index_monoset][0]));
 #endif
 
 #ifdef COUNTERS

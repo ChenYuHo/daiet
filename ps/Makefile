@@ -37,6 +37,11 @@ $(info "ALGO2 ON")
 CXXFLAGS += -DALGO2
 endif
 
+ifeq ($(TIMERS),ON)
+$(info "TIMERS ON")
+CXXFLAGS += -DTIMERS
+endif
+
 ifeq ($(DEBUG),ON)
 $(info "DEBUG ON")
 CXXFLAGS += -DDEBUG -g -O0

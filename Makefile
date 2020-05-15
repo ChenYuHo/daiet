@@ -43,11 +43,6 @@ $(info "LATENCIES ON")
 CXXFLAGS += -DLATENCIES
 endif
 
-ifeq ($(TIMESTAMPS),ON)
-$(info "TIMESTAMPS ON")
-CXXFLAGS += -DTIMESTAMPS
-endif
-
 ifeq ($(TIMERS),ON)
 $(info "TIMERS ON")
 CXXFLAGS += -DTIMERS
