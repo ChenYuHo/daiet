@@ -885,7 +885,6 @@ namespace daiet {
         tensor_size = 0;
         float scaling_factors[max_num_pending_messages];
         uint32_t pool_next_tsi[max_num_pending_messages];
-        std::cout<<"call worker now!"<<std::endl;
         memset(pool_set, 0, max_num_pending_messages*sizeof(uint8_t));
 
         volatile uint32_t rx_pkts = 0;
