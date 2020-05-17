@@ -102,13 +102,17 @@ namespace daiet {
         exp->exp = rte_cpu_to_be_16((uint16_t) max_exp);
 #endif
 #ifdef ALGO2
+#ifndef TIMERS
         min_next_tsi[pool_index] = UINT32_MAX;
+#endif
 #endif
         //cout<<"broadcast tsi: "<<daiet->tsi<<"; next tsi: "<<daiet->next_tsi<<endl;
         entry = (struct entry_hdr *) (daiet + 1);
         for (uint32_t i = 0; i < num_updates; i++, entry++) {
             entry->upd = rte_cpu_to_be_32(base_ptr[i]);
+#ifndef TIMERS
             base_ptr[i] = 0;
+#endif
         }
     }
 
@@ -242,8 +246,15 @@ namespace daiet {
         }
         return false;
     }
-    __rte_always_inline void send_updates(uint16_t set_pool_index, uint32_t tsi, uint16_t original_pool_index,  uint32_t next_tsi, uint8_t data_type, uint16_t num_workers) {
-
+    __rte_always_inline void send_updates(uint16_t set_pool_index, uint16_t unset_pool_index, uint32_t tsi, uint16_t original_pool_index,  uint32_t next_tsi, uint8_t data_type, uint16_t num_workers) {
+#ifdef TIMERS
+        //update ps_aggregated_messages and min_next_tsi of the other buffer
+        min_next_tsi[unset_pool_index] = UINT32_MAX;
+        int32_t* base_ptr = ps_aggregated_messages[unset_pool_index];
+        for (uint32_t i = 0; i < num_updates; i++) {
+            base_ptr[i] = 0;
+        }
+#endif
         rte_prefetch0 (rte_pktmbuf_mtod(cache_packet, void *));
         struct rte_ether_hdr* eth = rte_pktmbuf_mtod(cache_packet, struct rte_ether_hdr *);
         struct rte_ipv4_hdr* ip;
@@ -321,9 +332,7 @@ namespace daiet {
     }
 
     int ps(void*) {
-
-        int ret;
-
+        
         unsigned lcore_id;
         unsigned nb_rx = 0, j = 0, i = 0;
 
@@ -340,7 +349,7 @@ namespace daiet {
         struct rte_ipv4_hdr * ip;
         struct rte_udp_hdr * udp;
         struct daiet_hdr* daiet;
-        uint16_t pool_index = 0, start_pool_index = 0, set_pool_index = 0, set = 0;
+        uint16_t pool_index = 0, start_pool_index = 0, set_pool_index = 0, unset_pool_index = 0, set = 0;
 
 #ifdef TIMERS
         const uint32_t monoset_bitmap_size = max_num_pending_messages * num_workers;
@@ -428,7 +437,7 @@ namespace daiet {
         for (i = 0; i < max_num_pending_messages; i++) {
 #endif
             min_next_tsi[i] = UINT32_MAX;
-        }        
+        }
 #endif
 
         ps_workers_ip_to_mac = (mac_ip_pair*) rte_zmalloc_socket(NULL, num_workers * sizeof(struct mac_ip_pair), RTE_CACHE_LINE_SIZE, rte_socket_id());
@@ -501,6 +510,7 @@ namespace daiet {
                     set_pool_index = pool_index;
 #else
                     set_pool_index = (set == 0) ? pool_index : pool_index + max_num_pending_messages;
+                    unset_pool_index = (set == 0) ? pool_index + max_num_pending_messages : pool_index;
                     worker_idx = ip_to_worker_idx.find(ip->src_addr)->second;
 
                     if (set == 0) {
@@ -521,7 +531,6 @@ namespace daiet {
 #ifndef ALGO2
                     update_workerinfo(daiet, ip->src_addr, num_workers, set_pool_index);
 #endif
-                    
                         if (unlikely(cache_packet == NULL)) {
                             // Checksum offload
                             m->l2_len = sizeof(struct rte_ether_hdr);
@@ -541,7 +550,7 @@ namespace daiet {
                         }
                     
                         if (ps_aggregate_message(daiet, ip->src_addr, eth->s_addr, set_pool_index, num_workers)) {
-                            send_updates(set_pool_index, daiet->tsi, daiet->pool_index, daiet->next_tsi, daiet->data_type, num_workers);
+                            send_updates(set_pool_index, unset_pool_index, daiet->tsi, daiet->pool_index, daiet->next_tsi, daiet->data_type, num_workers);
                         }
 #ifdef TIMERS
                     }
