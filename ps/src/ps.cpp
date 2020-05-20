@@ -50,7 +50,6 @@ namespace daiet {
     thread_local static uint16_t ps_id;
     thread_local static struct rte_mempool *pool;
     thread_local static struct rte_mbuf** clone_burst;
-    thread_local static struct rte_mbuf* cache_packet = NULL;
     thread_local static uint64_t ps_tx = 0;    
     thread_local static worker_info** ps_workers_info;
     thread_local static uint32_t* min_next_tsi;
@@ -106,7 +105,6 @@ namespace daiet {
         min_next_tsi[pool_index] = UINT32_MAX;
 #endif
 #endif
-        //cout<<"broadcast tsi: "<<daiet->tsi<<"; next tsi: "<<daiet->next_tsi<<endl;
         entry = (struct entry_hdr *) (daiet + 1);
         for (uint32_t i = 0; i < num_updates; i++, entry++) {
             entry->upd = rte_cpu_to_be_32(base_ptr[i]);
@@ -158,21 +156,21 @@ namespace daiet {
     }
 
     /* Returns true if the aggregation for the offset is complete */
-    __rte_always_inline bool ps_aggregate_message(struct daiet_hdr* daiet, uint32_t be_src_ip, struct rte_ether_addr src_mac, uint16_t pool_index, uint16_t num_workers) {
+    __rte_always_inline bool ps_aggregate_message(struct daiet_hdr* daiet, uint32_t be_src_ip, struct rte_ether_addr src_mac, uint16_t set_pool_index, uint16_t shadow_pool_index, uint16_t num_workers) {
 
         struct entry_hdr * entry = (struct entry_hdr *) (daiet + 1);
 #ifndef ALGO2
-        worker_info* winfo_ptr = ps_workers_info[pool_index];
+        worker_info* winfo_ptr = ps_workers_info[set_pool_index];
 #endif
 #ifdef ALGO2
-        if (min_next_tsi[pool_index]>daiet->next_tsi) min_next_tsi[pool_index]=daiet->next_tsi;
-        ps_received_message_counters[pool_index]--;
+        if (min_next_tsi[set_pool_index]>daiet->next_tsi) min_next_tsi[set_pool_index]=daiet->next_tsi;
+        ps_received_message_counters[set_pool_index]--;
 #endif
 #ifdef NOSCALING
         switch (daiet->data_type) {
             case INT32:
                 {
-                    int32_t* base_ptr_int = ps_aggregated_messages[pool_index];
+                    int32_t* base_ptr_int = ps_aggregated_messages[set_pool_index];
                     for (uint32_t i = 0; i < num_updates; i++, entry++) {
                         uint32_t tmp = rte_be_to_cpu_32(entry->upd);
                         base_ptr_int[i] += ((int*)&tmp)[0]; 
@@ -181,7 +179,7 @@ namespace daiet {
                 break;
             case FLOAT32:
                 {
-                    float*  base_ptr_float32 = (float*)ps_aggregated_messages[pool_index];
+                    float*  base_ptr_float32 = (float*)ps_aggregated_messages[set_pool_index];
                     for (uint32_t i = 0; i < num_updates; i++, entry++) {
                         uint32_t tmp = rte_be_to_cpu_32(entry->upd);
                         base_ptr_float32[i] += ((float*)&tmp)[0]; 
@@ -190,7 +188,7 @@ namespace daiet {
                 break;
             case FLOAT16:
                 {
-                    float*  base_ptr_float16 = (float*)ps_aggregated_messages[pool_index];
+                    float*  base_ptr_float16 = (float*)ps_aggregated_messages[set_pool_index];
                     for (uint32_t i = 0; i < num_updates; i++, entry++) {
                         uint32_t tmp = rte_be_to_cpu_32(entry->upd);;
                         base_ptr_float16[i] += ((float*)&tmp)[0]; 
@@ -201,7 +199,7 @@ namespace daiet {
                 LOG_FATAL("Tensor type error");
         }
 #else
-        int32_t* base_ptr = ps_aggregated_messages[pool_index];
+        int32_t* base_ptr = ps_aggregated_messages[set_pool_index];
         struct exp_hdr * exp = (struct exp_hdr *) (((struct entry_hdr *) (daiet + 1)) + num_updates);
         for (uint32_t i = 0; i < num_updates; i++, entry++) {
             base_ptr[i] += rte_be_to_cpu_32(entry->upd);
@@ -225,7 +223,7 @@ namespace daiet {
 #endif        
 #ifdef NOSCALING
 #ifdef ALGO2
-        if (unlikely(ps_received_message_counters[pool_index]==0)) {
+        if (unlikely(ps_received_message_counters[set_pool_index]==0)) {
 #else
         if (daiet->tsi < min_nexttsi) {
             if(min_nexttsi==UINT32_MAX){
@@ -237,8 +235,14 @@ namespace daiet {
         if (all_equal || daiet->tsi < min_nexttsi) {
 #endif
 #ifdef ALGO2
-            ps_received_message_counters[pool_index] = num_workers;
-            daiet->next_tsi = min_next_tsi[pool_index];
+            ps_received_message_counters[set_pool_index] = num_workers;
+            daiet->next_tsi = min_next_tsi[set_pool_index];
+#ifdef TIMERS
+            //update ps_aggregated_messages and min_next_tsi of the other buffer
+            int32_t* base_ptr = ps_aggregated_messages[shadow_pool_index];
+            min_next_tsi[shadow_pool_index] = UINT32_MAX;
+            memset(ps_aggregated_messages[shadow_pool_index], 0, num_updates * sizeof(int32_t));
+#endif
 #else
             daiet->next_tsi = min_nexttsi;
 #endif
@@ -246,84 +250,6 @@ namespace daiet {
         }
         return false;
     }
-    __rte_always_inline void send_updates(uint16_t set_pool_index, uint16_t unset_pool_index, uint32_t tsi, uint16_t original_pool_index,  uint32_t next_tsi, uint8_t data_type, uint16_t num_workers) {
-#ifdef TIMERS
-        //update ps_aggregated_messages and min_next_tsi of the other buffer
-        min_next_tsi[unset_pool_index] = UINT32_MAX;
-        int32_t* base_ptr = ps_aggregated_messages[unset_pool_index];
-        for (uint32_t i = 0; i < num_updates; i++) {
-            base_ptr[i] = 0;
-        }
-#endif
-        rte_prefetch0 (rte_pktmbuf_mtod(cache_packet, void *));
-        struct rte_ether_hdr* eth = rte_pktmbuf_mtod(cache_packet, struct rte_ether_hdr *);
-        struct rte_ipv4_hdr* ip;
-        struct daiet_hdr* daiet = (struct daiet_hdr *) ((uint8_t *) (eth+1) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr));
-
-        ps_msg_setup(daiet, set_pool_index, num_workers);
-
-        daiet->tsi = tsi;
-        daiet->pool_index = original_pool_index;
-        daiet->next_tsi = next_tsi;
-        daiet->data_type = data_type;
-
-        // Allocate pkt burst
-        if (unlikely(rte_pktmbuf_alloc_bulk(pool, clone_burst, num_workers) < 0))
-            LOG_FATAL("Cannot allocate clone burst");
-
-        for (unsigned i = 0; i < num_workers; i++) {
-
-            // We need to deep copy as we will send different packets at the same time
-            deep_copy_single_segment_pkt(clone_burst[i], cache_packet);
-
-            eth = rte_pktmbuf_mtod(clone_burst[i], struct rte_ether_hdr *);
-
-            // Set dst MAC
-            rte_ether_addr_copy(&(ps_workers_ip_to_mac[i].mac), &(eth->d_addr));
-
-            // Set dst IP
-            ip = (struct rte_ipv4_hdr *) (eth + 1);
-            ip->dst_addr = ps_workers_ip_to_mac[i].be_ip;
-        }
-
-        unsigned sent = 0;
-        do {
-            sent += rte_eth_tx_burst(dpdk_par.portid, ps_id, clone_burst, num_workers);
-        } while (sent < num_workers);
-        ps_tx += num_workers;
-    }
-
-#ifdef TIMERS
-    __rte_always_inline void resend_updates(uint32_t be_src_ip, uint32_t worker_idx, uint16_t set_pool_index, uint32_t tsi, uint16_t original_pool_index, uint32_t next_tsi, uint8_t data_type, uint16_t num_workers) {
-
-        rte_prefetch0 (rte_pktmbuf_mtod(cache_packet, void *));
-        struct rte_ether_hdr* eth = rte_pktmbuf_mtod(cache_packet, struct rte_ether_hdr *);
-        struct rte_ipv4_hdr* ip;
-        struct daiet_hdr* daiet = (struct daiet_hdr *) ((uint8_t *) (eth+1) + sizeof(struct rte_ipv4_hdr) + sizeof(struct rte_udp_hdr));
-
-        ps_msg_setup(daiet, set_pool_index, num_workers);
-
-        daiet->tsi = tsi;
-        daiet->pool_index = original_pool_index;
-        daiet->next_tsi = next_tsi;
-        daiet->data_type = data_type;
-
-        rte_mbuf_refcnt_update(cache_packet,1);
-
-        // Set dst MAC
-        rte_ether_addr_copy(&(ps_workers_ip_to_mac[worker_idx].mac), &(eth->d_addr));
-
-        // Set dst IP
-        ip = (struct rte_ipv4_hdr *) (eth + 1);
-        ip->dst_addr = be_src_ip;
-
-        while (rte_eth_tx_burst(dpdk_par.portid, ps_id, &cache_packet, 1)==0)
-            ;
-
-        LOG_DEBUG("Retransmission: sent tsi: " +to_string(tsi) +" to worker "+to_string(worker_idx));
-        ps_tx += 1;
-    }
-#endif
 
     void ps_setup() {
     }
@@ -333,6 +259,8 @@ namespace daiet {
 
     int ps(void*) {
         
+        int ret;
+
         unsigned lcore_id;
         unsigned nb_rx = 0, j = 0, i = 0;
 
@@ -349,7 +277,7 @@ namespace daiet {
         struct rte_ipv4_hdr * ip;
         struct rte_udp_hdr * udp;
         struct daiet_hdr* daiet;
-        uint16_t pool_index = 0, start_pool_index = 0, set_pool_index = 0, unset_pool_index = 0, set = 0;
+        uint16_t pool_index = 0, start_pool_index = 0, set_pool_index = 0, shadow_pool_index = 0, set = 0, nb_tx = 0, sent = 0;
 
 #ifdef TIMERS
         const uint32_t monoset_bitmap_size = max_num_pending_messages * num_workers;
@@ -510,9 +438,10 @@ namespace daiet {
                     set_pool_index = pool_index;
 #else
                     set_pool_index = (set == 0) ? pool_index : pool_index + max_num_pending_messages;
-                    unset_pool_index = (set == 0) ? pool_index + max_num_pending_messages : pool_index;
+                    shadow_pool_index = (set == 0) ? pool_index + max_num_pending_messages : pool_index;
                     worker_idx = ip_to_worker_idx.find(ip->src_addr)->second;
-
+                    //if (worker_idx==1)
+                    //    std::cout<<"worker id: "<<worker_idx<<"; tsi"<<daiet->tsi<<"; pool index: "<<pool_index<<"; set: "<<set<<std::endl;
                     if (set == 0) {
                         bitmap_index = pool_index + worker_idx * max_num_pending_messages;
                         bitmap_shadow_index = bitmap_index + monoset_bitmap_size;
@@ -530,9 +459,8 @@ namespace daiet {
 
 #ifndef ALGO2
                     update_workerinfo(daiet, ip->src_addr, num_workers, set_pool_index);
-#endif
-                        if (unlikely(cache_packet == NULL)) {
-                            // Checksum offload
+#endif                   
+                        if (ps_aggregate_message(daiet, ip->src_addr, eth->s_addr, set_pool_index, shadow_pool_index, num_workers)) {
                             m->l2_len = sizeof(struct rte_ether_hdr);
                             m->l3_len = sizeof(struct rte_ipv4_hdr);
                             m->ol_flags |= daiet_par.getTxFlags();
@@ -544,26 +472,81 @@ namespace daiet {
                             // Swap ports
                             swap((uint16_t&) (udp->dst_port), (uint16_t&) (udp->src_port));
                             udp->dgram_cksum = rte_ipv4_phdr_cksum(ip, m->ol_flags);
-                            cache_packet = rte_pktmbuf_clone(m, pool);
-                            if (unlikely(cache_packet == NULL))
-                                LOG_FATAL("failed to allocate cache packet");
+                            ps_msg_setup(daiet, set_pool_index, num_workers);
+                            // Allocate pkt burst
+                            ret = rte_pktmbuf_alloc_bulk(pool, clone_burst, num_workers);
+                            if (unlikely(ret < 0))
+                                LOG_FATAL("Cannot allocate clone burst");
+    
+                            for (i = 0; i < num_workers; i++) {
+    
+                                // Clone packet
+                                deep_copy_single_segment_pkt(clone_burst[i], m);
+    
+                                eth = rte_pktmbuf_mtod(clone_burst[i], struct rte_ether_hdr *);
+    
+                                // Set dst MAC
+                                rte_ether_addr_copy(&(ps_workers_ip_to_mac[i].mac), &(eth->d_addr));
+    
+                                // Set dst IP
+                                ip = (struct rte_ipv4_hdr *) (eth + 1);
+                                ip->dst_addr = ps_workers_ip_to_mac[i].be_ip;
+                            }
+                            // Send packet burst
+                            sent = 0;
+                            do {
+                                nb_tx = rte_eth_tx_burst(dpdk_par.portid, ps_id,clone_burst, num_workers);
+    
+                                sent += nb_tx;
+                            } while (sent < num_workers);
+    
+                            ps_tx += num_workers;
                         }
-                    
-                        if (ps_aggregate_message(daiet, ip->src_addr, eth->s_addr, set_pool_index, num_workers)) {
-                            send_updates(set_pool_index, unset_pool_index, daiet->tsi, daiet->pool_index, daiet->next_tsi, daiet->data_type, num_workers);
-                        }
+                        // Free original packet
+                        rte_pktmbuf_free(m);
 #ifdef TIMERS
                     }
                     else{
                         if (ps_received_message_counters[set_pool_index] == num_workers) {
-                            resend_updates(ip->src_addr, worker_idx, set_pool_index, daiet->tsi, daiet->pool_index, min_next_tsi[set_pool_index],daiet->data_type, num_workers);
+                            daiet->next_tsi = min_next_tsi[set_pool_index];
+                            m->l2_len = sizeof(struct rte_ether_hdr);
+                            m->l3_len = sizeof(struct rte_ipv4_hdr);
+                            m->ol_flags |= daiet_par.getTxFlags();
+                            // Set src MAC
+                            rte_ether_addr_copy(&(eth->d_addr), &(eth->s_addr));
+                            // Set src IP
+                            ip->hdr_checksum = 0;
+                            ip->src_addr = ip->dst_addr;
+                            // Swap ports
+                            swap((uint16_t&) (udp->dst_port), (uint16_t&) (udp->src_port));
+                            udp->dgram_cksum = rte_ipv4_phdr_cksum(ip, m->ol_flags);
+                            ps_msg_setup(daiet, set_pool_index, num_workers);
+                            ret = rte_pktmbuf_alloc_bulk(pool, clone_burst, 1);
+                            if (unlikely(ret < 0))
+                                LOG_FATAL("Cannot allocate clone burst");
+                            deep_copy_single_segment_pkt(clone_burst[0], m); 
+                            eth = rte_pktmbuf_mtod(clone_burst[0], struct rte_ether_hdr *); 
+                            // Set dst MAC
+                            rte_ether_addr_copy(&(ps_workers_ip_to_mac[worker_idx].mac), &(eth->d_addr));
+                            // Set dst IP
+                            ip = (struct rte_ipv4_hdr *) (eth + 1);
+                            ip->dst_addr = ip->src_addr;
+                            // Send packet burst
+                            sent = 0;
+                            do {
+                                nb_tx = rte_eth_tx_burst(dpdk_par.portid, ps_id,clone_burst, 1);
+    
+                                sent += nb_tx;
+                            } while (sent < 1);                            
+                            ps_tx += 1;
                         }
+                        // Free original packet
+                        rte_pktmbuf_free(m);
                     }
 #endif
 #ifdef DEBUG
-                } 
+                }
 #endif
-                rte_pktmbuf_free(m);
             }
         }
 
